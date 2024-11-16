@@ -1,53 +1,39 @@
 # Stage 1: Base Stage (Building the environment)
-FROM ubuntu:latest AS base-stage
+FROM ubuntu:22.04 AS base
 
-# Set environment variables to avoid interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install cron and other necessary packages
+# Install cron and other necessary utilities
 RUN apt-get update && \
-    apt-get install -y cron && \
+    apt-get install -y cron sudo && \
     apt-get clean
 
-# Create 'abc' user
-RUN useradd -m abc
+# Create the 'abc' user and set up the directory with specific permissions
+RUN useradd -m abc && \
+    mkdir -p /home/abc/Test && \
+    chown -R abc:abc /home/abc/Test
 
-# Create the folder /aa/bb/cc and set ownership to the 'abc' user
-RUN mkdir -p /aa/bb/cc && \
-    chown -R abc:abc /aa/bb/cc
+# Set the working directory to /home/abc
+WORKDIR /home/abc
 
-# Stage 2: Intermediate Stage (Copy the shell script and setup cron)
-FROM base-stage AS intermediate-stage
+# Stage 2: Intermediate Stage (Copy the script and setup cron job)
+FROM base AS intermediate
 
-# Copy the shell script into the container
-COPY script.sh /path/to/your/script.sh
+# Switch to root user for copying files and setting permissions
+USER root
 
-# Change permissions to make the script executable
-RUN chmod +x /path/to/your/script.sh
+# Copy the shell script to the container
+COPY ./shell_script.sh /home/abc/
 
-# Setup a cron job to run the script with input '0' (to delete folder)
-RUN echo "*/5 * * * * abc /path/to/your/script.sh 0" > /etc/cron.d/run_script
+# Make the shell script executable
+RUN chmod +x /home/abc/shell_script.sh
 
-# Stage 3: Cleanup Stage (Run the script initially as cron with '0' input)
-FROM intermediate-stage AS cleanup-stage
+# Set up a cron job to run the script (with input 1) every minute
+RUN (echo "* * * * * /home/abc/shell_script.sh 1 >> /home/abc/cron.log 2>&1") | crontab -u abc -
 
-# Ensure the folder has proper permissions for the 'abc' user to delete it
-RUN chown -R abc:abc /aa/bb/cc
+# Stage 3: Final Stage - Run cron job
+FROM intermediate AS final
 
-# Install cron and run the cron jobs
-RUN crontab /etc/cron.d/run_script && \
-    cron && \
-    su - abc -c "/path/to/your/script.sh 0"
+# Set proper permissions for /home/abc
+RUN chown -R abc:abc /home/abc
 
-# Stage 4: Create Stage (Setup another cron job to run the script with input '1')
-FROM cleanup-stage AS create-stage
-
-# Add another cron job to run the script with input '1' (to create folder and file)
-RUN echo "@reboot abc /path/to/your/script.sh 1" >> /etc/cron.d/run_script
-
-# Final Stage: Run cron in the foreground
-FROM create-stage AS final-stage
-
-# Keep the container running with cron jobs
+# Start cron in the foreground
 CMD ["cron", "-f"]
-
